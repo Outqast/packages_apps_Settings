@@ -18,7 +18,7 @@
     android:layout_height="wrap_content"
     android:orientation="vertical"
     android:scrollbars="vertical"
-    android:background="@android:color/white">
+    android:background="@color/exposed_bg_dark">
 
     <ScrollView
         android:layout_width="match_parent"
@@ -56,7 +56,7 @@
                 android:layout_marginTop="8dip"
                 android:text="@string/show_owner_info_on_lockscreen_label"
                 android:textAppearance="?android:attr/textAppearanceMedium"
-                android:textColor="?android:attr/textColorSecondary"
+                android:textColor="@color/exposed_secondary_text_light"
             />
 
             <View
@@ -68,7 +68,7 @@
             <EditText android:id="@+id/owner_info_edit_text"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginStart="62dip"
+                android:layout_marginTop="8dip"
                 android:layout_marginTop="40dip"
                 android:gravity="top"
                 android:hint="@string/owner_info_settings_edit_text_hint"
