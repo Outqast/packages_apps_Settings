@@ -31,7 +31,12 @@ import static android.provider.Settings.System.SCREEN_OFF_TIMEOUT;
 
 import android.app.Activity;
 import android.app.ActivityManagerNative;
+import android.app.AlertDialog;
 import android.app.Dialog;
+import android.app.IActivityManager;
+import android.content.Context;
+import android.content.DialogInterface;
+import android.app.ProgressDialog;
 import android.app.admin.DevicePolicyManager;
 import android.content.ContentResolver;
 import android.content.Context;
@@ -48,10 +53,14 @@ import android.preference.Preference;
 import android.preference.Preference.OnPreferenceClickListener;
 import android.preference.PreferenceScreen;
 import android.preference.SwitchPreference;
+import android.text.Editable;
 import android.provider.SearchIndexableResource;
 import android.provider.Settings;
 import android.text.TextUtils;
 import android.util.Log;
+import android.view.LayoutInflater;
+import android.view.View;
+import android.widget.EditText;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -62,6 +71,7 @@ public class DisplaySettings extends SettingsPreferenceFragment implements
 
     /** If there is no setting in the provider, use this. */
     private static final int FALLBACK_SCREEN_TIMEOUT_VALUE = 30000;
+    private static final int DIALOG_DENSITY = 101;
 
     private static final String KEY_SCREEN_TIMEOUT = "screen_timeout";
     private static final String KEY_FONT_SIZE = "font_size";
@@ -82,6 +92,17 @@ public class DisplaySettings extends SettingsPreferenceFragment implements
     private SwitchPreference mLiftToWakePreference;
     private SwitchPreference mDozePreference;
     private SwitchPreference mAutoBrightnessPreference;
+    private PreferenceScreen mDozeFragement;
+
+    protected Context mContext;
+
+    private ContentObserver mAccelerometerRotationObserver =
+            new ContentObserver(new Handler()) {
+        @Override
+        public void onChange(boolean selfChange) {
+            updateDisplayRotationPreferenceDescription();
+        }
+    };
 
     @Override
     public void onCreate(Bundle savedInstanceState) {
@@ -151,6 +172,42 @@ public class DisplaySettings extends SettingsPreferenceFragment implements
                     rotateLockedResourceId =
                             R.string.display_auto_rotate_stay_in_landscape;
                 }
+            removePreference(KEY_DISPLAY_ROTATION);
+        }
+
+        mWakeUpOptions = (PreferenceCategory) prefSet.findPreference(KEY_WAKEUP_CATEGORY);
+        mWakeUpWhenPluggedOrUnplugged =
+            (SwitchPreference) findPreference(KEY_WAKEUP_WHEN_PLUGGED_UNPLUGGED);
+
+        // hide option if device is already set to never wake up
+        if(!getResources().getBoolean(
+                com.android.internal.R.bool.config_unplugTurnsOnScreen)) {
+                mWakeUpOptions.removePreference(mWakeUpWhenPluggedOrUnplugged);
+                prefSet.removePreference(mWakeUpOptions);
+        } else {
+            mWakeUpWhenPluggedOrUnplugged.setChecked(Settings.System.getInt(resolver,
+                        Settings.System.WAKEUP_WHEN_PLUGGED_UNPLUGGED, 1) == 1);
+            mWakeUpWhenPluggedOrUnplugged.setOnPreferenceChangeListener(this);
+        }
+        // lcd density
+        mContext = getActivity().getApplicationContext();
+        int newDensityValue;
+
+        mLcdDensityPreference = (ListPreference) findPreference(KEY_LCD_DENSITY);
+        densityEntries[8] = getString(R.string.custom_density);
+        int defaultDensity = DisplayMetrics.DENSITY_DEVICE;
+        int currentDensity = DisplayMetrics.DENSITY_CURRENT;
+        int currentIndex = -1;
+        String[] densityEntries = new String[9];
+        for (int idx = 0; idx < 8; ++idx) {
+            int pct = (75 + idx*5);
+            int val = defaultDensity * pct / 100;
+            densityEntries[idx] = Integer.toString(val);
+            if (pct == 100) {
+                densityEntries[idx] += " (" + getResources().getString(R.string.lcd_density_default) + ")";
+            }
+            if (currentDensity == val) {
+                currentIndex = idx;
             }
             rotatePreference.addItem(activity.getString(rotateLockedResourceId), true);
             rotatePreference.setSelectedItem(RotationPolicy.isRotationLocked(activity) ?
@@ -380,6 +437,32 @@ public class DisplaySettings extends SettingsPreferenceFragment implements
         if (preference == mDozePreference) {
             boolean value = (Boolean) objValue;
             Settings.Secure.putInt(getContentResolver(), DOZE_ENABLED, value ? 1 : 0);
+        if (KEY_WAKEUP_WHEN_PLUGGED_UNPLUGGED.equals(key)) {
+            Settings.System.putInt(getContentResolver(),
+                    Settings.System.WAKEUP_WHEN_PLUGGED_UNPLUGGED,
+                    (Boolean) objValue ? 1 : 0);
+        }
+        if (KEY_LCD_DENSITY.equals(key)) {
+            try {
+                // The value must begin with a decimal number.  It may
+                // optionally be follewed by a space and arbitrary text.
+                String strValue = (String) objValue;
+                int idx = strValue.indexOf(' ');
+                if (idx > 0) {
+                    strValue = strValue.substring(0, idx);
+                }
+            String strValue = (String) objValue;
+            if (strValue.equals(getResources().getString(R.string.custom_density))) {
+                showDialog(DIALOG_DENSITY);
+            } else {
+                int value = Integer.parseInt(strValue);
+                writeLcdDensityPreference(preference.getContext(), value);
+                updateLcdDensityPreferenceDescription(value);
+            }
+            }
+            catch (NumberFormatException e) {
+                Log.e(TAG, "could not persist display density setting", e);
+            }
         }
         return true;
     }
@@ -434,4 +517,49 @@ public class DisplaySettings extends SettingsPreferenceFragment implements
                     return result;
                 }
             };
+    public Dialog onCreateDialog(int dialogId) {
+        LayoutInflater factory = LayoutInflater.from(mContext);
+
+        switch (dialogId) {
+            case DIALOG_DENSITY:
+                final View textEntryView = factory.inflate(
+                        R.layout.alert_dialog_text_entry, null);
+                return new AlertDialog.Builder(getActivity())
+                        .setTitle(R.string.custom_density_dialog_title)
+                        .setMessage(getResources().getString(R.string.custom_density_dialog_summary))
+                        .setView(textEntryView)
+                        .setPositiveButton(getResources().getString(R.string.set_custom_density_set), new DialogInterface.OnClickListener() {
+                            public void onClick(DialogInterface dialog, int whichButton) {
+                                EditText dpi = (EditText) textEntryView.findViewById(R.id.dpi_edit);
+                                Editable text = dpi.getText();
+                                Log.i(TAG, text.toString());
+                                String editText = dpi.getText().toString();
+
+                                try {
+                                    SystemProperties.set("persist.sys.lcd_density", editText);
+                                }
+                                catch (Exception e) {
+                                    Log.w(TAG, "Unable to save LCD density");
+                                }
+                                try {
+                                    final IActivityManager am = ActivityManagerNative.asInterface(ServiceManager.checkService("activity"));
+                                    if (am != null) {
+                                        am.restart();
+                                    }
+                                }
+                                catch (RemoteException e) {
+                                    Log.e(TAG, "Failed to restart");
+                                }
+                            }
+
+                        })
+                        .setNegativeButton(getResources().getString(R.string.cancel), new DialogInterface.OnClickListener() {
+                            public void onClick(DialogInterface dialog, int whichButton) {
+
+                                dialog.dismiss();
+                            }
+                        }).create();
+        }
+        return null;
+    }
 }
